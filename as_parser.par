@@ -1,0 +1,666 @@
+/~ AlgoScript lexer and grammar rules
+=====================================
+
+Perhaps we should switch to gjs?
+tracemonkey seems a bit faster than javascriptcore, the API a bit more modern, and
+it has all those cool new js features like generators (very nice to have in music related stuff)..
+just make sure that we can do what we need:
+- dynamic module object
+- include code (just read file and eval!)
+- gobject subclassing? (might be needed for goocanvas)
+- os module? seems I only use os.realpath..
+- sandbox! try to copy evalcx() from spidermonkey shell, or use context.c:gjs_context_eval()?
+then we need to split creation of sandbox and access to global, like in Seed.
+get_global: return js_context->global..
+but evalcx(script,global) is a lot cleaner and simpler. perhaps copy and modify gjs_context_eval() so that it can
+take another global object instead of the one associated with the context?
+
+also platform.*:
+    this.sprintf = Seed.sprintf;  //could just copy the one from seed
+    this.include = Seed.include;  //read file and eval
+    this.quit = Seed.quit;        //not really needed?
+    this.argv = Seed.argv;        //can't find this... perhaps we need to make a function for it..
+
+need to adjust jscc and driver...
+
+
+TODO
+====
+
+better error reporting. keep track of newlines and/or forward them to the javascript code.
+keep a map of js->as linenumbers. make sure we 
+
+something like GCD? could use glib thread pools..
+
+dispatch: \concurrent, ^{
+    something();
+    dispatch: \main, ^{
+        update_ui();
+    };
+};
+
+dispatch:main,func does:
+
+GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE,^{func();0})
+
+Also something like this:
+- dispatch.map(array, func)
+call func(array[i]) on a new thread for each element in array.
+block until all threads are done and return an array of all results.
+
+......
+
+better error reporting, how to handle line numbers etc? stack trace?
+is it possible to pass through linebreaks without having to add it
+to every grammar??
+
+allow arg unpack (like f.apply()) on
+- methods & functions
+- super call: arguments.callee.__superMethod.apply(this,args)
+- constructor call
+
+arg unpack vid call? foo(1,2,*x) => foo.apply(this,[1,2].concat(x))
+
+wrappa + - * / ** % till funktionsanrop som __mul(a,b) eller a.__mul(b)?
+då kan vi lägga till dessa ops för alla typer, vilket är väldigt flexibelt.
+behövs även för += och *= osv..
+gör benchmark och kolla performance cost när man gör detta på numbers och strings..
+nej, blir för långsamt! gör sugar ops som anropar metoder istf builtin ops..
+t.ex +# *#
+
+"a +~= b" socker för a.extend(b)?
+för Arrays: Array.prototype.push.apply(this,b)
+för Numbers och Strings: this += b.toString(); <- funkar ej! kan ej ändra sitt eget värde..
+
+break ut från forEach? kan ej ha break i en funktion som anropas i en loop..
+dock skulle man kunna fejka det med att kolla returvärdet, om == "__breakCookie__" så avbryts loopen..
+
+Number::loop eller times istället för forEach?
+
+en del funktioner från as_extensions.js kan göras inline för performance?
+
+tillåt att arg skippas med tomt komma, varvid de blir undefined?
+
+named classes? (sätt då Class.prototype._className)
+
+array slicing: a[5,3] start,end eller start,length?
+
+vore fint med negativa array index, men då måste vi wrappa [] till en .at metod :(
+
+break and continue labels? 'label:' krockar ju med alt. call syntax..
+kanske kan man stoppa in labels i själva for(;;) och while() statement?
+eller använd annan symbol, t.ex label:: eller label# eller @label;
+något som är synd med .forEach är att break och continue inte funkar där..
+eventuellt kan man göra något fulhack med exceptions? throw Break...
+
+regexp literals? eller använd bara new RegExp: 'my regexp'...
+
+IGNORE?
+for(a in b) loop? javascripts är dock broken, eftersom den itererar på alla props..
+skulle kunna göra for(a in b) if(b.hasOwnProperty(a)) ...
+dock itererar den ju bara på keys, även i arrays!
+eventuellt göra en .forAllProps om man verkligen vill iterera på allt inkl prototyp arv..
+
+FIXED
+PROBLEM: class < Foo getMethods() blir Class.make(Foo,getMethods)(); !!
+class getMethods() blir dock Class.make(getMethods())...
+något med '<' assoc eller prec? försvann när jag tog bort '<'
+
+FIXED
+instanceof funkar ej, man vill kolla superclasses också...
+"kindof" eller liknande? hur göra?
+Class.prototype.isPrototypeOf(x) funkar!
+dock ej för Number, String, Boolean..
+har gjort en __kindOf() som kör Object(x).. då funkar det.
+
+FIXED
+in
+"in" operator tar ej hänsyn till om prop är egen eller finns i prototype. gör ny:
+e1 in e2 => e2.hasOwnProperty(e1)
+kanske vill man att den ska kolla keys i objects och values i arrays och substrings i strings?
+
+
+~/
+
+[*
+
+/*
+Implicit variable declaration:
+When setting a variable, if a variable does not exist in an outer or current scope,
+add 'var name;' at the top of the current scope.
+
+var _scopeLevel, _varTable;
+
+function _addVar(name) {
+    if(!_varTable.hasOwnProperty(name)) {
+        _varTable[name] = _scopeLevel;
+    }
+}
+
+function _popVars() {
+    var a = [];
+    for(var k in _varTable) {
+        if(_varTable.hasOwnProperty(k) && _varTable[k]==_scopeLevel) {
+            a.push(k);
+            delete _varTable[k];
+        }
+    }
+    _scopeLevel--;
+    return a;
+}
+
+function _pushVars() {
+    _scopeLevel++;
+}
+*/
+function _makeFunction(parms,splat,a) {
+    var defaults = [];
+    var p = [];
+
+    for(var i=0;i<parms.length;i++) {
+        if(parms[i][1]!==undefined)
+            defaults.push(parms[i]);
+        p.push(parms[i][0]);
+    }
+    var s = "(function("+p.join(",")+"){\n";
+//    var vars = _popVars();
+//    if(vars.length) s += "var "+vars.join(",")+";\n";
+
+    for(i=0;i<defaults.length;i++) {
+        var n = defaults[i][0];
+        var v = defaults[i][1];
+        s += "if("+n+"===undefined) "+n+"="+v+";\n";
+    }
+    if(splat) {
+        s += "var "+splat+"=Array.prototype.slice.call(arguments,arguments.callee.length);\n";
+    }
+    for(var i=0;i<a.length-1;i++) {
+        s += a[i].str + ';';
+    }
+    s += a[i].hasValue ? "return("+a[i].str+");" : a[i].str + ';';
+    s += "\n})";
+    return s;
+}
+
+function _makeCall(e,a,self) {
+    var passThis = false;
+    if(self===undefined) self="this";
+    else passThis = true;
+
+//    if(e=='super') {
+//        e="arguments.callee.__superMethod";
+//        passThis = true;
+//    }
+    
+    if(a.named) {
+//        return e+'.named_call('+self+',{'+a.named+'}'+(a.args?','+a.args:'')+')';
+        return '__namedCall('+e+','+self+',{'+a.named+'}'+(a.args?','+a.args:'')+')';
+    } else {
+        if(passThis)
+            return e+".call("+self+(a.args?','+a.args:'')+')';
+        else
+            return e+'('+a.args+')';
+    }
+}
+
+function _defaultMakeBinOp(a,op,b) {
+    return a+op+b;
+}
+
+function _makeHereDoc(str) {
+    return "'"+str.replace(/^\'\'\'\s*\n/, '').replace(/\n\s*\'\'\'$/, '').replace(/\n/mg,"\\n").replace(/\'/mg,"\\'")+"'";
+}
+
+//FIXME: handle escaping of $ somehow..
+//this works almost, but not for "foo\\${x}"..
+//however.. "foo${x}" is not better than "foo"+x so maybe just skip this thing..
+/*function _makeString(str) {
+    var char = str[0];
+    str = str.slice(1,-1);
+    var a = str.split(/([\\]?\${.+?})/);
+    for(var i=0;i<a.length;i++) {
+        var s = a[i];
+        var j = s.indexOf("${");
+        a[i] = j==0?"("+s.slice(2,-1)+")":char+s+char;
+    }
+    return a.join("+");
+}*/
+function _makeString(str) { return str; }
+
+function _makeProgram(str) {
+//    var vars = _popVars();
+//    var s = vars.length?"var "+vars.join(",")+"; ":"";
+//    return s+str;
+    return str;
+}
+
+*]
+
+!	' |\r|\n|\t|//[^\n]*\n|/\*([^\*]/|\*[^/]|[^\*/])*\*/'
+
+	'if'
+	'else'
+	'while'
+	'do'
+	'switch'
+	'case'
+	'default'
+	'class'
+	'var'
+	'nil'
+	'undefined'
+	'true'
+	'false'
+	'delete'
+	'kindof'                    KindOf
+	'typeof'
+	'for'
+	'break'
+	'continue'
+	'super'
+	'return'
+	'try'
+	'catch'
+	'throw'
+	'new'
+	'in'
+	'inf'
+	'nan'
+	','
+	'\.\.'
+	'\.\.\.'
+	'\|'
+	'{'
+	'}'
+	':'
+	'\?'
+	';'
+	'^\('
+	'^{'
+	'\['
+	'\]'
+	'[\\]'                          BackSlash
+	'='
+	'%%'                            StrFmt
+	'\('
+	'\)'
+	'\~'
+	'[A-Za-z_$][A-Za-z0-9_$]*'		Identifier
+	'\'\'\'.+\'\'\''              HereDoc
+    '\'([^\']|[\\]\')*\'|"([^"]|[\\]")*"' String
+	'[0-9]+|0[xX][0-9a-fA-F]+'		Integer
+	'[0-9]+\.[0-9]+([eE][\+-][0-9]+)?'	Float
+	;
+
+>	'\->'                            Arrow
+    '=>'
+    ;
+
+>   '\+='
+    '\-='
+    '\*='
+    '/='
+    '%='
+    '&='
+    '\|='
+    '^='
+    ;
+    
+<   '&&'
+    '\|\|'
+    ;
+
+<   '&'
+    '\|'
+    '^'
+    ;
+
+<   '=='
+	'!='
+    ;
+    
+<	'<='
+	'>='
+	'>'
+	'<'
+    ;
+
+<	'>>'
+	'<<'
+	;
+
+<	'\+'			/~ Left-associative tokens, lowest precedence ~/
+    '\+~'
+	'\-'
+	;
+	
+<	'\*'			/~ Left-associative tokens, highest precedence ~/
+    '\*\*'
+	'/'
+	'%'
+	;
+	
+>	'!'
+	'~'
+    ;
+    
+<   '\+\+'
+    '\-\-'
+    ;
+
+<   '@'
+    ;
+	
+<   '\.'
+    ;
+##
+
+p       : sl                                [* result = _makeProgram(%1); *]
+        |                                   [* result = ""; *]
+        ;
+
+/~
+this makes a semicolon _delimited_ statement list, which is nice in function bodies..
+but it also means that all statements need semicolon delimiting,
+including blocks after if, else, while, for.
+The if-else syntax looks a bit strange...
+~/
+
+sl      : s
+        | sl ';' s                          [* %% = %1 + ';\n' + %3; *]
+        | sl ';'                            [* %% = %1 + ';\n'; *]
+        ;
+    
+snoval  : 'if' '(' e ')' block                      [* %% = "if(" + %3 + ") " + %5; *]
+        | 'if' '(' e ')' s 'else' block             [* %% = "if(" + %3 + ") " + %5 + "; else " + %7; *]
+        | 'if' '(' e ')' '{' sl '}' 'else' block    [* %% = "if(" + %3 + ") {" + %6 + "} else " + %9; *]
+        | 'while' '(' e ')' block                   [* %% = "while(" + %3 + ") " + %5; *]
+        | 'for' '(' for1 ';' opte ';' optargs ')' block [* %% = "for("+%3+";"+%5+";"+%7+") "+%9; *]
+        | 'switch' '(' e ')' '{' caselines optdefault '}'      [* %% = "switch("+%3+") {"+%6+%7+"}"; *]
+        | 'try' '{' sl '}' 'catch' '(' Identifier ')' '{' sl '}'   [* %% = "try {"+%3+"} catch("+%7+") {"+%10+"}"; *]
+        | 'break'
+        | 'continue'
+        | 'return' e                        [* %% = "return "+%2; *]
+        | 'throw' e                         [* %% = "throw "+%2; *]
+        | vardecl
+        ;
+
+for1    : optargs
+        | vardecl
+        ;
+
+decl    : Identifier '=' e                  [* %% = %1+"="+%3; *]
+        | Identifier
+        ;
+
+decls   : decls ',' decl                    [* %% = %1+","+%3; *]
+        | decl
+        ;
+
+vardecl : 'var' decls                       [* %% = "var "+%2; *]
+        ;
+
+optdefault  : 'default' '=>' s ';'              [* %% = "default: "+%3+";\n"; *]
+            | 'default' '=>' '{' sl '}' optsemi [* %% = "default: "+%4+";\n"; *]
+            |
+            ;
+
+cases       : cases ',' e                      [* %% = %1+"case "+%3+": "; *]
+            | e                                [* %% = "case "+%1+": "; *]
+            ;
+
+caseline    : cases '=>' s ';'                 [* %% = %1+%3+"; break;\n"; *]
+            | cases '=>' '{' sl '}' optsemi    [* %% = %1+%4+"; break;\n"; *]
+            ;
+
+caselines   : caselines caseline              [* %% = %1+%2; *]
+            | caseline
+            ;
+
+optsemi : ';'
+        |
+        ;
+        
+opte    : e
+        |                                   [* %% = ""; *]
+        ;
+
+s       : snoval
+        | e
+        ;
+
+block   : s
+        | '{' sl '}'                        [* %% = '{'+%2+'}'; *]
+        ;
+        
+e       : call
+        | binop
+        | '-' e             &'*'            [* %% = "-"+%2; *]
+        | '~' e                             [* %% = "~"+%2; *]
+        | '!' e                             [* %% = "!"+%2; *]
+        | assignment
+        | function
+        | value
+        | e '.' do                          [* %% = '('+%1+').forEach'; *]
+        | 'new' e                           [* %% = "new "+%2; *]
+        | 'delete' e                        [* %% = "delete "+%2; *]
+        | '[' e '..' e ']'                  [* %% = "Array.range("+%2+","+%4+")"; *]
+        | 'typeof' e                        [* %% = "__typeOf("+%2+")"; *]
+/~        | e KindOf e                        [* %% = "__kindOf("+%1+","+%3+")"; *] ~/
+        | e KindOf e                        [* %% = "("+%3+").prototype.isPrototypeOf(Object("+%1+"))"; *]
+        | e '?' e ':' e                     [* %% = %1+"?"+%3+":"+%5; *]
+        | classdef
+        | e '++'                            [* %% = %1+%2; *]
+        | e '--'                            [* %% = %1+%2; *]
+        | '++' e                            [* %% = %1+%2; *]
+        | '--' e                            [* %% = %1+%2; *]
+/~        | 'import' IdChain                  [* %% = "__importer__._import(["+%2+"])"; *]
+        | 'import' IdChain 'in' e           [* %% = %4+"._import(["+%2+"])"; *] ~/
+        ;
+
+/~ IdChain : IdChain '.' Identifier            [* %% = %1+",'"+%3+"'"; *]
+        | Identifier                        [* %% = "'"+%1+"'"; *]
+        ; ~/
+
+value   : literal
+        | member
+        | Identifier
+        | '(' e ')'                         [* %% = "("+%2+")"; *] 
+        ;
+
+classdef    : 'class' makeclass                 [* %% = "__makeClass("+%2+")"; *]
+            | 'class' '+' e ',' e                   [* %% = "__extendClass("+%3+","+%5+")"; *]
+            ;
+
+makeclass   : e                                 [* %% = %1; *]
+            | '<' e ',' e                           [* %% = %2+","+%4; *]
+            ;
+
+optctx      : '@' e                             [* %% = %2; *]
+            |                                   [* %% = undefined; *]
+            ;
+
+/~ call        : e optctx '(' callargs ')'               [* %% = _makeCall(%1,%4,%2); *] ~/
+/~ call        : e '(' callargs ')' optctx          [* %% = _makeCall(%1,%3,%5); *] ~/
+call        : e '(' callargs ')'           [* %% = _makeCall(%1,%3); *]
+            | e '(' callargs ')' '@' e       [* %% = _makeCall(%1,%3,%6); *]
+            | e ':' callargs                   [* %% = _makeCall(%1,%3); *]
+/~            | 'super' '(' callargs ')'           [* %% = _makeCall(%1,%3); *]
+            | 'super' '(' callargs ')' '@' e     [* %% = _makeCall(%1,%3,%6); *]
+            | 'super' ':' callargs               [* %% = _makeCall(%1,%3); *] ~/
+/~ would be nice but parses f(2)*3 as f((2)*3)... since (2) is taken as a parenthesized expression..
+   | e args                     [* %% = %1+'('+%2+')'; *] ~/
+            ;
+
+callargs    : args ',' namedargs                [* %% = {args:%1,named:%3}; *]
+            | args                              [* %% = {args:%1,named:""}; *]
+            | namedargs                         [* %% = {args:"",named:%1}; *]
+            |                                   [* %% = {args:"",named:""}; *]
+            ;
+
+named       : Identifier '=>' e                 [* %% = %1+":"+%3; *]
+            ;
+
+namedargs   : namedargs ',' named               [* %% = %1+","+%3; *]
+            | named
+            ;
+
+funcline    : snoval                            [* %% = {str:%1}; *]
+            | e                                 [* %% = {str:%1,hasValue:true}; *]
+            ;
+
+funcbody    : funcline                          [* %% = [%1]; *]
+            | funcbody ';' funcline             [* %% = (%1).concat(%3); *]
+            | funcbody ';'
+            ;
+/~
+funcstart   : parms ',' splat Arrow             [* /*_pushVars();*/ %% = [%1,%3]; *]
+            | parms Arrow                       [* /*_pushVars();*/ %% = [%1];  *]
+            | splat Arrow                       [* /*_pushVars();*/ %% = [[],%1]; *]
+            | Arrow                             [* /*_pushVars();*/ %% = [[]];   *]
+            ;
+~/
+funcparms   : parms ',' splat                   [* %% = [%1,%3]; *]
+            | parms                             [* %% = [%1];  *]
+            | splat                             [* %% = [[],%1]; *]
+            |                                   [* %% = [[]];   *]
+            ;
+
+splat       : Identifier '*'
+            ;
+
+parms       : parms ',' parm                    [* %% = (%1).concat([%3]); *]
+            | parm                              [* %% = [%1]; *]
+            ;
+
+parm        : Identifier                        [* %% = [%1]; *]
+            | Identifier '=' e                  [* %% = [%1,%3]; *]
+            ;
+
+function    : '^(' funcparms ')' '{' funcbody '}' [* %% = _makeFunction((%2)[0],(%2)[1],%5); *]
+            | '^{' funcbody '}'                 [* %% = _makeFunction([],null,%2); *]
+/~          : '{' funcstart funcbody '}'        [* %% = _makeFunction((%2)[0],(%2)[1],%3); *]~/
+            ;
+
+assignment  : member '=' e                      [* %% = %1+"="+%3; *]
+            | Identifier '=' e                  [* %% = %1+"="+%3; /*_addVar(%1);*/ *]
+            | ref '+=' e                        [* %% = %1+%2+%3; *]
+            | ref '-=' e                        [* %% = %1+%2+%3; *]
+            | ref '*=' e                        [* %% = %1+%2+%3; *]
+            | ref '/=' e                        [* %% = %1+%2+%3; *]
+            | ref '%=' e                        [* %% = %1+%2+%3; *]
+            | ref '&=' e                        [* %% = %1+%2+%3; *]
+            | ref '|=' e                        [* %% = %1+%2+%3; *]
+            | ref '^=' e                        [* %% = %1+%2+%3; *]
+            ;
+
+member      : e '.' Identifier                  [* %% = '('+%1+').'+%3; *]
+            | e '[' e ']'                       [* %% = %1+'['+%3+']'; *]
+            | e '[' e '..' e ']'                [* %% = %1+'.slice('+%3+','+%5+')'; *]
+/~            | '@' Identifier                    [* %% = 'this.'+%2; *] ~/
+            ;
+
+ref         : member
+            | Identifier
+            ;
+
+optargs     : args
+            |                                   [* %% = ""; *]
+            ;
+
+args        : args ',' e                       [* %% = %1+','+%3; *]
+            | e
+            ;
+
+binop       : e '-' e                           [* %% = _makeBinOp(%1,%2,%3); *]
+            | e '+' e                           [* %% = _makeBinOp(%1,%2,%3); *]
+            | e '/' e                           [* %% = _makeBinOp(%1,%2,%3); *]
+            | e '*' e                           [* %% = _makeBinOp(%1,%2,%3); *]
+            | e '%' e                           [* %% = _makeBinOp(%1,%2,%3); *]
+            | e '>>' e                          [* %% = %1 + %2 + %3; *]
+            | e '<<' e                          [* %% = %1 + %2 + %3; *]
+            | e '&' e                           [* %% = %1 + %2 + %3; *]
+            | e '|' e                           [* %% = %1 + %2 + %3; *]
+            | e '^' e                           [* %% = %1 + %2 + %3; *]
+            | e '==' e                          [* %% = %1 + "===" + %3; *]
+            | e '<' e                           [* %% = %1 + %2 + %3; *]
+            | e '>' e                           [* %% = %1 + %2 + %3; *]
+            | e '<=' e                          [* %% = %1 + %2 + %3; *]
+            | e '>=' e                          [* %% = %1 + %2 + %3; *]
+            | e '&&' e                          [* %% = %1 + %2 + %3; *]
+            | e '||' e                          [* %% = %1 + %2 + %3; *]
+            | e '!=' e                          [* %% = %1 + "!==" + %3; *]
+            | e 'in' e                          [* %% = "__inContainer("+%1+","+%3+")"; *]
+            | e '+~' e                          [* %% = %1+".concat("+%3+")"; *]
+            | e '**' e                          [* %% = "Math.pow("+%1+","+%3+")"; *]
+            | e StrFmt '(' args ')'             [* %% = "__sprintf("+%1+","+%4+")"; *]
+            ;
+
+
+literal     : num
+            | str
+            | symbol
+            | '{' objprops optcomma '}'         [* %% = "{"+%2+"}"; *]
+            | '{' '}'                           [* %% = "{}"; *]
+            | '[' elements ']'                  [* %% = "["+%2+"]"; *]
+            | 'true'
+            | 'false'
+            | 'nil'                             [* %% = "null"; *]
+            | 'undefined'
+            | 'inf'                             [* %% = "Infinity"; *]
+            | 'nan'                             [* %% = "NaN"; *]
+            | '@'                               [* %% = "this"; *]
+            | 'super'                           [* %% = "(arguments.callee.__superMethod.bind(this))"; *]
+            | HereDoc                           [* %% = _makeHereDoc(%1); *]
+            ;
+            
+elements    : elements ',' opte                 [* %% = %1 + "," + %3; *]
+            | opte
+            ;
+
+optcomma    : ','
+            |
+            ;
+
+symbol      : BackSlash Identifier              [* %% = "'"+%2+"'"; *]
+            ;
+        
+objprops    : objprops ',' objprop              [* %% = %1 + "," + %3; *]
+            | objprop
+            ;
+
+objprop     : key ':' e                         [* %% = %1+':'+%3; *]
+            ;
+
+key         : Identifier
+            | '<' Identifier                    [* %% = "$GET$"+%2; *]
+            | '>' Identifier                    [* %% = "$SET$"+%2; *]
+            | '*' Identifier                    [* %% = "$NEW$"+%2; *]
+            | str
+            | symbol
+            | num
+            ;
+
+str         : String                            [* %% = _makeString(%1); *]
+            ;
+
+num         : Integer
+            | Float
+            ;
+
+[*
+
+/* Switching one of these variables on will enable debug facilities
+	of the various parser drivers */
+//##PREFIX##_dbg_withtrace = true;
+//##PREFIX##_dbg_withparsetree = true;
+//##PREFIX##_dbg_withstepbystep = true;
+
+//var parse = function(str) {
+//    _scopeLevel = 0;
+//    _varTable = {};
+//    return __##PREFIX##parse(str);
+//}
+
+*]
+
