@@ -4,7 +4,7 @@ cairo = import cairo;
 
 Plotter = class
 {
-    init: { src=[] ->
+    init: ^(src=[]) {
         @set_source: src;
         @win = new Gtk.Window;
         @dar = new Gtk.DrawingArea;
@@ -14,13 +14,13 @@ Plotter = class
         @dar.signal.expose_event.connect(@on_expose.bind(this));
         @update();
     },
-    set_source: { s ->
+    set_source: ^(s) {
         @src_obj = s;
         @peak = 0;
-        s.do: { x -> if x>@peak @peak=x };
+        s.do: ^(x) { if x>@peak @peak=x };
         @update();
     },
-    on_expose: { d ->
+    on_expose: ^(d) {
         var cr = new cairo.Context.from_drawable(d.window);
         var size = d.window.get_size();
         cr.line_width = 2;
@@ -29,7 +29,7 @@ Plotter = class
         var x = 0;
         cr.move_to(x,size.height/2);
         print: dx;
-        @src_obj.do: { val ->
+        @src_obj.do: ^(val) {
             cr.line_to(x, val);
             x += dx;
         };
@@ -37,7 +37,7 @@ Plotter = class
         cr.destroy();
         false;
     },
-    update: { ->
+    update: ^{
         if @dar
             @dar.queue_draw();
     }

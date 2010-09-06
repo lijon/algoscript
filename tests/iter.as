@@ -1,18 +1,18 @@
 var Loop = class
 {
-    init: {a->
+    init: ^(a) {
         @.seq = a;
         @.counter = 0;
         @.length = a.length;
     },
 
-    next: {->
+    next: ^{
         if (@.counter >= @.length)
             @.counter = 0;
         @.seq[@.counter++];
     },
 
-    reset: {->
+    reset: ^{
         @.counter = 0;
         @.seq[@.counter];
     }

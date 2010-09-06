@@ -39,7 +39,7 @@ You can reach the global object with ctx.global:
 algoscript.parse() takes an optional additional parserConfig object.
 Currently there is only one property: 'makeBinOp' which tells the parser how to handle +-*/% binops:
 
-> config = {makeBinOp:{a,op,b-> "binOp("+[a,"'"+op+"'",b].join()+")"; }}
+> config = {makeBinOp:^(a,op,b){"binOp("+[a,"'"+op+"'",b].join()+")"; }}
 > imports.algoscript.parse("5*4+1",config)
 binOp(binOp(5,'*',4),'+',1)
 
@@ -175,8 +175,6 @@ value, index/key, and the object beeing iterated over. For numbers it passes one
 
 Numbers and Objects has a .map() method too:
     
-//    8.map: {i -> 2**i}    // returns [1,2,4,8,16,32,64,128]
-    
     8.map: ^(i) {2**i}    // returns [1,2,4,8,16,32,64,128]
 
 MISC SYNTAX
@@ -232,7 +230,7 @@ array, object, string and number literals are the same as in JS:
 
 return an array of all permutations of the word "algo":
 
-    "algo".split("").permutations().map:{v->v.join("")}
+    "algo".split("").permutations().map:^(v){v.join("")}
 
     // returns algo,lago,galo,aglo,lgao,glao,olag,loag,aolg,oalg,laog,
     // alog,agol,gaol,oagl,aogl,goal,ogal,ogla,gola,loga,olga,gloa,lgoa
